@@ -32,16 +32,24 @@ The page loads the Manrope font from Google Fonts when online; offline it falls 
 
 ## The data file
 
-The app reads **`data/sales.csv`**. The sample file is already there (1,891 rows, 15 columns).
-To use another copy, replace that file and refresh the page, or point to it:
+Nothing to set up: the sample file (`data/sales.csv`, 1,891 rows, 15 columns) is bundled and shown on first run.
 
-```bash
-SALES_CSV=/path/to/sales.csv python app.py        # macOS/Linux
-$env:SALES_CSV="C:\path\sales.csv"; python app.py  # Windows PowerShell
-```
+To look at another file, click **Ganti data (CSV)** at the top of the page and pick it.
+
+- The file is checked first. If a column is missing or a value cannot be read, it is rejected with the line
+  numbers, and the data already on screen stays as it was.
+- An accepted file is saved in `data/uploads/` and shown at once. The "Sumber" line at the top names the file in use.
+- **Kembali ke data contoh** switches back to the bundled sample. Uploaded files are moved to
+  `data/uploads/archive/`, not deleted.
+- Copying a `.csv` into `data/uploads/` by hand works too: the newest file there is used after a refresh.
+- For your own file the period is whatever dates the file covers, and the trend compares its first and last
+  calendar month. A one-month file shows totals and rankings without the month columns.
 
 Both formats from the job page work: the downloaded comma-separated CSV, and the table copied
 as tab-separated text (values such as `940,500` are read as whole rupiah; text above the header row is skipped).
+Files up to 5 MB are accepted. The server listens on this computer only (127.0.0.1).
+
+For scripts, `SALES_CSV=/path/to/file.csv python app.py` still overrides everything.
 
 ## Calculation rules
 
@@ -49,7 +57,7 @@ as tab-separated text (values such as `940,500` are read as whole rupiah; text a
 |---|---|
 | Source of truth | `net_sales_idr`. Gross, discount, qty and price are only cross-checked. |
 | What is counted | Every product line. Lines sharing an `invoice_no` are all counted. |
-| Period | 1 September – 31 October 2026 (the whole sample). Rows outside it would be excluded with a warning. |
+| Period | Bundled sample: 1 September – 31 October 2026, and the page warns if the file does not match that. Uploaded file: the dates the file covers. |
 | Region names | Trimmed, then `Jabar` → `Jawa Barat`, and letter case fixed (`JAWA BARAT`, `JABODETABEK`, `JAWA TIMUR` → normal spelling). 10 rows change; no row is dropped. An unknown region is shown as-is with a warning. |
 | Weakest 5 outlets | Sum `net_sales_idr` per `outlet_id` over the full period, rank lowest to highest, ties broken by `outlet_id`. Grouping is by ID because 8 outlet names are shared by more than one outlet. |
 | Outlet name / region shown | The most frequent trimmed value for that `outlet_id` (4 rows have a trailing space in the name). |
@@ -120,7 +128,7 @@ calculation as JSON (`/api/report`), and shows each raw region spelling with the
 python -m unittest discover -s tests -v
 ```
 
-21 tests, all passing (Python 3.14, Windows 11). They cover:
+30 tests, all passing (Python 3.14, Windows 11). They cover:
 
 - row count is 1,891 and dates run 2026-09-01 to 2026-10-31;
 - the grand total equals a separate plain sum of `net_sales_idr` from the raw CSV;
@@ -131,7 +139,12 @@ python -m unittest discover -s tests -v
   plus the biggest decline and a next step;
 - September + October equals the total for the whole file and for every region and brand;
 - the biggest declines, the peer medians and the total without duplicates match separate recounts from the raw CSV;
-- tab-separated input with `940,500`-style numbers parses; a bad value or missing column is reported as an error.
+- tab-separated input with `940,500`-style numbers parses; a bad value or missing column is reported as an error;
+- upload against a real local server: a valid file becomes the active one, a broken file is rejected and leaves
+  nothing behind, reset returns to the sample without deleting the upload, a file copied into `data/uploads/`
+  is detected, an oversized file and a request from another site are refused, and a path-like file name
+  cannot escape the folder;
+- a one-month file uses its own period and reports no trend.
 
 In the browser, started with `python app.py`: the page showed the figures above; the "Jumlah" row of both the
 region and the brand table read Rp849.285.700 + Rp878.751.200 = Rp1.728.036.900; both outlet tables matched the
@@ -141,15 +154,21 @@ The copy button showed "Tersalin"; I did not paste into Telegram itself. Both fo
 With a deliberately broken CSV (one `n/a` in `net_sales_idr`) the page showed the red error box with the line
 number and no totals.
 
+"Ganti data", in the browser: a broken file showed "ditolak, data sebelumnya tetap dipakai" and the totals did
+not change; an October-only file switched the page to 1 Oktober s.d. 31 Oktober 2026 with Rp878.751.200 and no
+month columns; "Kembali ke data contoh" brought back Rp1.728.036.900. The file was handed to the page by script,
+because the automated browser cannot operate the operating system's file picker; I did not click through that dialog.
+
 Not tested: macOS/Linux, and Python versions older than 3.14 (the code avoids newer syntax and should run on 3.9+).
 
 ## Files
 
 ```
-app.py              local web server (standard library)
+app.py              local web server (standard library): pages, upload, auto-detect, reset
 sales_report.py     loading, validation, normalization, totals, ranking, Telegram paragraph
 static/index.html   the page (Dua Kelinci green #004532 for structure, red #C42226 for attention, Manrope)
 static/logo.png     Dua Kelinci logo, taken from the job posting page
 data/sales.csv      the sample data
+data/uploads/       files added with "Ganti data" (created on first upload, not in Git)
 tests/              unit tests
 ```

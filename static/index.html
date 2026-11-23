@@ -61,6 +61,12 @@ h2.tight{margin-bottom:0}
 .btn:hover{background:var(--green-hover)}
 .btn:active{background:var(--green-active)}
 .status{font-weight:700;color:var(--green)}
+.side{display:flex;flex-direction:column;align-items:flex-start;gap:10px}
+.tools{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;font-size:13px}
+.btn2{min-height:44px;padding:9px 16px;border:1.5px solid var(--green);border-radius:4px;background:#fff;color:var(--green);font:inherit;font-size:14px;font-weight:700}
+.btn2:hover{background:var(--panel)}
+.btn2:active{background:var(--track)}
+.btn2:disabled{cursor:not-allowed;color:var(--muted);border-color:var(--rule-strong);background:#fff}
 
 .scroll{overflow-x:auto}
 table.data{width:100%;border-collapse:collapse;font-size:13.5px}
@@ -113,13 +119,21 @@ footer{margin-top:36px;padding-top:14px;border-top:1px solid var(--green);font-s
         <div class="period" id="period">Membaca data dan menghitung total...</div>
       </div>
     </div>
-    <table class="meta" id="meta" hidden>
-      <tbody>
-        <tr><td>Sumber</td><td id="metaFile"></td></tr>
-        <tr><td>Baris invoice</td><td id="metaRows"></td></tr>
-        <tr><td>Outlet</td><td id="metaOutlets"></td></tr>
-      </tbody>
-    </table>
+    <div class="side">
+      <table class="meta" id="meta" hidden>
+        <tbody>
+          <tr><td>Sumber</td><td id="metaFile"></td></tr>
+          <tr><td>Baris invoice</td><td id="metaRows"></td></tr>
+          <tr><td>Outlet</td><td id="metaOutlets"></td></tr>
+        </tbody>
+      </table>
+      <div class="tools">
+        <button class="btn2" id="pick" type="button">Ganti data (CSV)</button>
+        <button class="btn2" id="reset" type="button" hidden>Kembali ke data contoh</button>
+        <input id="file" type="file" accept=".csv,.tsv,.txt,text/csv" aria-label="Pilih file CSV penjualan" hidden>
+        <span class="status" id="uploadStatus" role="status" aria-live="polite"></span>
+      </div>
+    </div>
   </header>
   <div class="double"></div>
 
@@ -213,53 +227,57 @@ function tableHead(table, columns) {
 
 function notice(kind, title, lead, items) {
   const box = el('div', {className: 'notice ' + kind}, [el('h2', {textContent: title})]);
-  if (kind === 'error') box.setAttribute('role', 'alert');
+  if (kind.startsWith('error')) box.setAttribute('role', 'alert');
   if (lead) box.append(el('p', {textContent: lead}));
   box.append(el('ul', {}, items.map(text => el('li', {textContent: text}))));
   $('notices').append(box);
 }
 
+// A file that covers one month has nothing to compare, so the month columns are left out.
 function breakdown(table, label, items, report) {
   const [first, last] = report.months.names;
-  tableHead(table, [[label], [first, true], [last, true], ['Naik/turun', true], ['Net sales', true], ['Porsi']]);
+  const single = report.months.single;
+  const pick = cells => single ? cells.filter((cell, index) => index === 0 || index > 3) : cells;
+  tableHead(table, pick([[label], [first, true], [last, true], ['Naik/turun', true], ['Net sales', true], ['Porsi']]));
   const max = Math.max(...items.map(item => item.net), 1);
   const body = el('tbody');
   items.forEach(item => {
     const fill = el('span');
     fill.style.width = Math.max(0, item.net / max * 100) + '%';
-    body.append(el('tr', {}, [
+    body.append(el('tr', {}, pick([
       rowHead(item.name),
       td(rupiah(item.first), 'n'),
       td(rupiah(item.last), 'n'),
       td(signed(item.change_pct), 'n ' + (item.change_pct !== null && item.change_pct < 0 ? 'down' : 'up')),
       td(rupiah(item.net), 'n strong'),
       el('td', {}, [el('span', {className: 'bar'}, [fill]), pct(item.share)])
-    ]));
+    ])));
   });
   const total = report.months.total;
-  body.append(el('tr', {className: 'total'}, [
+  body.append(el('tr', {className: 'total'}, pick([
     rowHead('Jumlah'),
     td(rupiah(items.reduce((sum, item) => sum + item.first, 0)), 'n'),
     td(rupiah(items.reduce((sum, item) => sum + item.last, 0)), 'n'),
     td(signed(total.change_pct), 'n'),
     td(rupiah(items.reduce((sum, item) => sum + item.net, 0)), 'n strong'),
     td('100%')
-  ]));
+  ])));
   table.append(body);
 }
 
 function outletTable(table, outlets, report, lastColumns, lastCells) {
   const [first, last] = report.months.names;
-  tableHead(table, [['No'], ['Outlet'], ['ID'], ['Region'], ['Tipe'], [first, true], [last, true]].concat(lastColumns));
+  const months = report.months.single ? [] : [[first, true], [last, true]];
+  tableHead(table, [['No'], ['Outlet'], ['ID'], ['Region'], ['Tipe']].concat(months, lastColumns));
   const body = el('tbody');
   outlets.forEach(o => body.append(el('tr', {}, [
-    td(o.rank), rowHead(o.outlet_name), td(o.outlet_id), td(o.region), td(o.outlet_type),
-    td(rupiah(o.first), 'n'), td(rupiah(o.last), 'n')
-  ].concat(lastCells(o)))));
+    td(o.rank), rowHead(o.outlet_name), td(o.outlet_id), td(o.region), td(o.outlet_type)
+  ].concat(report.months.single ? [] : [td(rupiah(o.first), 'n'), td(rupiah(o.last), 'n')], lastCells(o)))));
   table.append(body);
 }
 
 function render(r) {
+  $('reset').hidden = !r.can_reset;
   if ((r.warnings || []).length) {
     notice('warn', 'Data mungkin tidak lengkap', 'Angka di bawah tetap dihitung dari baris yang ada.', r.warnings);
   }
@@ -277,11 +295,13 @@ function render(r) {
   $('metaOutlets').textContent = number(r.source.outlets) + ' outlet, ' + r.by_region.length + ' region, ' + r.by_brand.length + ' brand';
   $('meta').hidden = false;
 
-  $('sum').append(
-    el('tr', {}, [td(first), td(rupiah(month.first))]),
-    el('tr', {}, [el('td', {}, [last + ' ', el('span', {className: 'note', textContent: '(' + signed(month.change_pct) + ' dari ' + first + ')'})]), td(rupiah(month.last))]),
-    el('tr', {className: 'grand'}, [td('Total'), td(rupiah(r.total_net))])
-  );
+  if (!r.months.single) {
+    $('sum').append(
+      el('tr', {}, [td(first), td(rupiah(month.first))]),
+      el('tr', {}, [el('td', {}, [last + ' ', el('span', {className: 'note', textContent: '(' + signed(month.change_pct) + ' dari ' + first + ')'})]), td(rupiah(month.last))])
+    );
+  }
+  $('sum').append(el('tr', {className: 'grand'}, [td('Total'), td(rupiah(r.total_net))]));
   if (r.duplicates.lines) {
     $('dupLine').append('Tanpa ' + r.duplicates.lines + ' baris kembar identik: ',
       el('strong', {textContent: rupiah(r.duplicates.total_without)}), '. Baris kembar tetap dihitung di semua tabel.');
@@ -332,6 +352,47 @@ async function copySummary() {
   setTimeout(() => { $('copied').textContent = ''; }, 3000);
 }
 $('copy').addEventListener('click', copySummary);
+
+// "Ganti data": the server checks the file first and keeps the current data if it is rejected.
+const post = (url, options) => fetch(url, Object.assign({method: 'POST'}, options, {
+  headers: Object.assign({'X-Requested-With': 'sales-recap'}, (options || {}).headers)
+})).then(response => response.json());
+
+function busy(on, text) {
+  $('pick').disabled = on;
+  $('reset').disabled = on;
+  $('uploadStatus').textContent = text || '';
+}
+
+$('pick').addEventListener('click', () => $('file').click());
+$('file').addEventListener('change', async () => {
+  const file = $('file').files[0];
+  $('file').value = '';
+  if (!file) return;
+  document.querySelectorAll('.notice.upload').forEach(node => node.remove());
+  busy(true, 'Memeriksa ' + file.name + '...');
+  try {
+    const result = await post('/api/upload', {body: file, headers: {'X-Filename': encodeURIComponent(file.name)}});
+    if (result.ok) { location.reload(); return; }
+    busy(false);
+    notice('error upload', 'File "' + file.name + '" ditolak, data sebelumnya tetap dipakai',
+      'Perbaiki hal berikut di file tersebut, lalu pilih lagi.', result.errors);
+    window.scrollTo(0, 0);
+  } catch (error) {
+    busy(false);
+    notice('error upload', 'File tidak bisa dikirim', 'Pastikan "python app.py" masih berjalan, lalu coba lagi.', [String(error)]);
+  }
+});
+$('reset').addEventListener('click', async () => {
+  busy(true, 'Mengembalikan data contoh...');
+  try {
+    await post('/api/reset');
+    location.reload();
+  } catch (error) {
+    busy(false);
+    notice('error upload', 'Data contoh tidak bisa dikembalikan', 'Pastikan "python app.py" masih berjalan, lalu coba lagi.', [String(error)]);
+  }
+});
 
 fetch('/api/report').then(response => response.json()).then(render).catch(error => {
   $('period').textContent = 'Data tidak bisa ditampilkan';

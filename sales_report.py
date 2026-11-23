@@ -93,6 +93,8 @@ def _month_pair(rows, first, last):
     """Net sales in the first and the last calendar month of the period."""
     a = sum(r["net_sales_idr"] for r in rows if (r["date"].year, r["date"].month) == first)
     b = sum(r["net_sales_idr"] for r in rows if (r["date"].year, r["date"].month) == last)
+    if first == last:  # a one-month file has nothing to compare against
+        return {"first": b, "last": b, "change": 0, "change_pct": None}
     return {"first": a, "last": b, "change": b - a,
             "change_pct": (100.0 * (b - a) / a) if a > 0 else None}
 
@@ -287,37 +289,45 @@ def _data_notes(rows):
     return notes
 
 
-def build_report(path):
+def build_report(path, sample=True):
+    """Compute the whole report.
+
+    sample=True is the bundled test file: it must match the brief (1,891 rows,
+    1 Sep - 31 Oct 2026) or the page warns. sample=False is a file the user
+    supplied: the period is whatever dates the file covers.
+    """
     all_rows, errors = load_rows(path)
     report = {"ok": not errors, "errors": errors, "warnings": [], "file": str(path)}
     if errors:
         report["errors"] = errors[:20] + (["… and %d more" % (len(errors) - 20)] if len(errors) > 20 else [])
         return report
 
-    rows = [r for r in all_rows if PERIOD_START <= r["date"] <= PERIOD_END]
-    outside = len(all_rows) - len(rows)
     date_min = min(r["date"] for r in all_rows)
     date_max = max(r["date"] for r in all_rows)
-    if outside:
-        report["warnings"].append("%d baris di luar periode %s tidak dihitung."
-                                  % (outside, format_period(PERIOD_START, PERIOD_END)))
-    if len(all_rows) != EXPECTED_ROWS:
-        report["warnings"].append("File berisi %s baris, sedangkan dataset contoh seharusnya %s baris. "
-                                  "Data mungkin tidak lengkap."
-                                  % (format_number(len(all_rows)), format_number(EXPECTED_ROWS)))
+    start, end = (PERIOD_START, PERIOD_END) if sample else (date_min, date_max)
+    rows = [r for r in all_rows if start <= r["date"] <= end]
     if not rows:
         report["ok"] = False
-        report["errors"] = ["No rows fall inside %s to %s." % (PERIOD_START, PERIOD_END)]
+        report["errors"] = ["No rows fall inside %s to %s." % (start, end)]
         return report
-    if (date_min, date_max) != (PERIOD_START, PERIOD_END):
-        report["warnings"].append("Rentang tanggal di file adalah %s s.d. %s, bukan 2026-09-01 s.d. 2026-10-31."
-                                  % (date_min, date_max))
-    unknown = sorted({r["region"] for r in rows} - set(CANONICAL_REGIONS))
-    if unknown:
-        report["warnings"].append("Region tidak dikenal (ditampilkan apa adanya): " + ", ".join(unknown))
+    if sample:
+        outside = len(all_rows) - len(rows)
+        if outside:
+            report["warnings"].append("%d baris di luar periode %s tidak dihitung."
+                                      % (outside, format_period(start, end)))
+        if len(all_rows) != EXPECTED_ROWS:
+            report["warnings"].append("File berisi %s baris, sedangkan dataset contoh seharusnya %s baris. "
+                                      "Data mungkin tidak lengkap."
+                                      % (format_number(len(all_rows)), format_number(EXPECTED_ROWS)))
+        if (date_min, date_max) != (start, end):
+            report["warnings"].append("Rentang tanggal di file adalah %s s.d. %s, bukan %s s.d. %s."
+                                      % (date_min, date_max, start, end))
+        unknown = sorted({r["region"] for r in rows} - set(CANONICAL_REGIONS))
+        if unknown:
+            report["warnings"].append("Region tidak dikenal (ditampilkan apa adanya): " + ", ".join(unknown))
 
     total = sum(r["net_sales_idr"] for r in rows)
-    months = ((PERIOD_START.year, PERIOD_START.month), (PERIOD_END.year, PERIOD_END.month))
+    months = ((start.year, start.month), (end.year, end.month))
     month_names = [MONTHS_ID[months[0][1] - 1], MONTHS_ID[months[1][1] - 1]]
     month_total = _month_pair(rows, *months)
     regions = _breakdown(rows, "region", total, months)
@@ -330,7 +340,7 @@ def build_report(path):
                      key=lambda o: (o["change"], o["outlet_id"]))
     declines = [dict(o, rank=i + 1) for i, o in enumerate(falling[:5])]
     dup_lines, dup_net, _ = _duplicates(rows)
-    period_label = format_period(PERIOD_START, PERIOD_END)
+    period_label = format_period(start, end)
 
     region_sum = sum(r["net"] for r in regions)
     brand_sum = sum(b["net"] for b in brands)
@@ -342,15 +352,16 @@ def build_report(path):
         {"label": "5 outlet terendah punya ID berbeda",
          "ok": len({o["outlet_id"] for o in weakest}) == len(weakest),
          "detail": ", ".join(o["outlet_id"] for o in weakest)},
-        {"label": "Jumlah baris & rentang tanggal sesuai dataset contoh",
-         "ok": len(all_rows) == EXPECTED_ROWS and (date_min, date_max) == (PERIOD_START, PERIOD_END),
+        {"label": "Jumlah baris & rentang tanggal sesuai dataset contoh" if sample
+                  else "Semua baris terbaca tanpa error",
+         "ok": (not sample) or (len(all_rows) == EXPECTED_ROWS and (date_min, date_max) == (start, end)),
          "detail": "%s baris, %s s.d. %s" % (format_number(len(all_rows)), date_min, date_max)},
     ]
 
     raw_regions = Counter(r["raw"]["region"] for r in rows)
     report.update({
-        "period": {"start": PERIOD_START.isoformat(), "end": PERIOD_END.isoformat(), "label": period_label},
-        "source": {"rows_read": len(all_rows), "rows_counted": len(rows),
+        "period": {"start": start.isoformat(), "end": end.isoformat(), "label": period_label},
+        "source": {"is_sample": sample, "rows_read": len(all_rows), "rows_counted": len(rows),
                    "date_min": date_min.isoformat(), "date_max": date_max.isoformat(),
                    "invoices": len({r["invoice_no"] for r in rows}), "outlets": len(outlets)},
         "total_net": total,
@@ -358,7 +369,7 @@ def build_report(path):
         "by_region": regions,
         "by_brand": brands,
         "weakest_outlets": weakest,
-        "months": {"names": month_names, "total": month_total},
+        "months": {"names": month_names, "total": month_total, "single": months[0] == months[1]},
         "duplicates": {"lines": dup_lines, "net": dup_net, "total_without": total - dup_net},
         "biggest_declines": declines,
         "summary": _summary(period_label, total, month_names, month_total, regions, brands, weakest, declines),
